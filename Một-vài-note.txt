@@ -1,0 +1,166 @@
+1. Model -> Repository -> Service -> dto -> mapper
+
+linux-x86_64, windows-x86_64
+
+2. Tạo docker service patient-service-db
+
+docker run -d \
+  --name patient-service-db \
+  -p 5000:5432 \
+  -v C:/Users/NghiaTV/db_volumes/patient-service-db:/var/lib/postgresql/data \
+  -e POSTGRES_USER=admin_user \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=db \
+  --network internal \
+  postgres:latest
+  
+3.  Tạo docker patient-service
+
+docker run -d \
+  --name patient-service \
+  -p 4000:4000 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://patient-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  -e SERVER_PORT=4000 \
+  --network internal \
+  patient-service
+  
+4. Tạo lệnh run docker file:  docker build -t billing-service:latest .
+  
+5. Tạo docker cho billing-service.
+
+docker run -d \
+  --name billing-service \
+  --network internal \
+  -p 4001:4001 \
+  -p 9001:9001 \
+  billing-service:latest
+  
+6. Update patient-service
+
+docker run -d \
+  --name patient-service \
+  --network internal \
+  -p 4000:4000 \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://patient-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  -e BILLING_SERVICE_ADDRESS=billing-service \
+  -e BILLING_SERVICE_GRPC_PORT=9001 \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka-server:9092 \
+  patient-service:latest
+  
+7.Triển khai code với kafa
+
+7.1 Tạo server kafka.
+
+docker run -d \
+  --name kafka-server \
+  --network internal \
+  -p 9092:9092 \
+  -p 9094:9094 \
+  -e KAFKA_NODE_ID=0 \
+  -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-server:9092,EXTERNAL://localhost:9094 \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka-server:9093 \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
+  apache/kafka:latest
+  
+7.2 Cài kafka plugin cho intelij
+
+
+
+8. Triển khai analytics-service.
+
+docker run -d \
+  --name analytics-service \
+  -p 4002:4002 \
+  --network internal \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka-server:9092 \
+  -e SERVER_PORT=4002
+  analytics-service:latest
+  
+9.Triển khai api-gateway.
+
+docker run -d \
+  --name api-gateway \
+  --network internal \
+  -p 4004:4004 \
+  api-gateway:latest
+  
+10. Tạo docker service patient-service-db
+
+docker run -d \
+  --name auth-service-db \
+  -p 5001:5432 \
+  -v C:/Users/NghiaTV/db_volumes/auth-service-db:/var/lib/postgresql/data \
+  -e POSTGRES_USER=admin_user \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=db \
+  --network internal \
+  postgres:17
+  
+11.Tạo docker run container: auth-service
+
+docker run -d \
+  --name auth-service \
+  -p 4005:4005 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://auth-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  --network internal \
+  auth-service:latest
+  
+v2:
+
+docker run -d \
+  --name auth-service \
+  -p 4005:4005 \
+  --network internal \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://auth-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  -e JWT_SECRET="T7k9K2hG8s9fDk3lQw9XzYv1P0aBcDeFgHiJkLmNoPq=" \
+  auth-service:latest
+
+v3: có thể xóa đi p:4005 vì dùng gateway.
+docker run -d \
+  --name auth-service \
+  --network internal \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://auth-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  -e JWT_SECRET="T7k9K2hG8s9fDk3lQw9XzYv1P0aBcDeFgHiJkLmNoPq=" \
+  auth-service:latest
+  
+v4: Thêm biến môi trường.
+
+docker run -d \
+  --name auth-service \
+  -p 4005:4005 \
+  --network internal \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://auth-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  -e JWT_SECRET="T7k9K2hG8s9fDk3lQw9XzYv1P0aBcDeFgHiJkLmNoPq=" \
+  -e AUTH_SERVICE_URL=http://auth-service:4005 \
+  auth-service:latest
+ 

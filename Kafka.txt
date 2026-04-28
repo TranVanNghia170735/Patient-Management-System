@@ -1,0 +1,232 @@
+
+Ví dụ patient-service -> kafka -> analytics-service
+
+
+1. Tạo server kafka.
+
+docker run -d \
+  --name kafka-server \
+  --network internal \
+  -p 9092:9092 \
+  -p 9094:9094 \
+  -e KAFKA_NODE_ID=0 \
+  -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-server:9092,EXTERNAL://localhost:9094 \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka-server:9093 \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
+  apache/kafka:latest
+
+
+
+
+2. Triển khai trên service patient-service
+
++ Import dependencies:
+
+		<dependency>
+			<groupId>org.springframework.kafka</groupId>
+			<artifactId>spring-kafka</artifactId>
+		</dependency>
+
+	<build>
+		<extensions>
+			<!-- Ensure OS compatibility for protoc -->
+			<extension>
+				<groupId>kr.motd.maven</groupId>
+				<artifactId>os-maven-plugin</artifactId>
+				<version>1.7.0</version>
+			</extension>
+		</extensions>
+		<plugins>
+			<!-- Spring boot / maven  -->
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+
+			<!-- PROTO -->
+			<plugin>
+				<groupId>org.xolstice.maven.plugins</groupId>
+				<artifactId>protobuf-maven-plugin</artifactId>
+				<version>0.6.1</version>
+				<configuration>
+					<protocArtifact>com.google.protobuf:protoc:3.25.5:exe:linux-x86_64</protocArtifact>
+					<pluginId>grpc-java</pluginId>
+
+					<pluginArtifact>io.grpc:protoc-gen-grpc-java:1.68.1:exe:linux-x86_64</pluginArtifact>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>compile</goal>
+							<goal>compile-custom</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+
++ Tạo 1 folder với 1 file là KafkaProducer
+
+@Service
+public class KafkaProducer {
+    private static final Logger log = LoggerFactory.getLogger(
+            KafkaProducer.class);
+    private final KafkaTemplate<String, byte[]> kafkaTemplate;
+
+    public KafkaProducer(KafkaTemplate<String, byte[]> kafkaTemplate) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    public void sendEvent(Patient patient) {
+        PatientEvent event = PatientEvent.newBuilder()
+                .setPatientId(patient.getId().toString())
+                .setName(patient.getName())
+                .setEmail(patient.getEmail())
+                .setEventType("PATIENT_CREATED")
+                .build();
+
+        try {
+            kafkaTemplate.send("patient", event.toByteArray());
+            log.info("Send Patient Event: {}",
+                    event.toByteArray());
+        } catch (Exception e) {
+            log.error("Error sending PatientCreated event: {}", event);
+        }
+    }
+}
+
+
+
++ Thêm vào service
+ kafkaProducer.sendEvent(newPatient);
+ 
+
++ Thêm vào application.properties
+
+spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.ByteArraySerializer
+
+
++ Run container 
+
+docker run -d \
+  --name patient-service \
+  --network internal \
+  -p 4000:4000 \
+  -e SPRING_DATASOURCE_PASSWORD=password \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://patient-service-db:5432/db \
+  -e SPRING_DATASOURCE_USERNAME=admin_user \
+  -e SPRING_JPA_HIBERNATE_DDL_AUTO=update \
+  -e SPRING_SQL_INIT_MODE=always \
+  -e BILLING_SERVICE_ADDRESS=billing-service \
+  -e BILLING_SERVICE_GRPC_PORT=9001 \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka-server:9092 \
+  patient-service:latest
+
+
+
+
+
+
+3. Triển khai trên service analytics-service.
+
++ Import dependencies:
+
+		<dependency>
+			<groupId>org.springframework.kafka</groupId>
+			<artifactId>spring-kafka</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.kafka</groupId>
+			<artifactId>spring-kafka-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>com.google.protobuf</groupId>
+			<artifactId>protobuf-java</artifactId>
+			<version>4.29.1</version>
+		</dependency>
+
++ Tạo 1 folder với 1 file là KafkaConsumer
+
+@Service
+public class KafkaConsumer {
+    private static final Logger log = LoggerFactory.getLogger(
+            KafkaConsumer.class);
+
+    @KafkaListener(topics="patient", groupId = "analytics-service")
+    public void consumeEvent(byte[] event) {
+        try {
+            PatientEvent patientEvent = PatientEvent.parseFrom(event);
+            // ... perform any business related to analytics here
+
+            log.info("Received Patient Event: [PatientId={},PatientName={},PatientEmail={}]",
+                    patientEvent.getPatientId(),
+                    patientEvent.getName(),
+                    patientEvent.getEmail());
+        } catch (InvalidProtocolBufferException e) {
+            log.error("Error deserializing event {}", e.getMessage());
+        }
+    }
+}
++ Tạo Dockerfile
+
+FROM maven:3.9.9-eclipse-temurin-17 AS builder
+
+WORKDIR /app
+
+COPY pom.xml .
+
+RUN mvn dependency:go-offline -B
+
+COPY src ./src
+
+RUN mvn clean package
+
+FROM eclipse-temurin:17-jdk-jammy AS runner
+
+WORKDIR /app
+
+COPY --from=builder /app/target/demo-0.0.1-SNAPSHOT.jar ./app.jar
+
+EXPOSE 4002
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+
++ Thêm vào application.properties
+
+spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+
+
++ Run container 
+
+docker run -d \
+  --name analytics-service \
+  -p 4002:4002 \
+  --network internal \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+  analytics-service:latest
+  
+
